@@ -1,0 +1,11 @@
+[package]
+name = "ics2-core"
+version = "0.1.0"
+description = "Core module for ics2 solution. ICS2 stands for ICP based storage service"
+repository = ""
+keywords = [ "ics2", "storage", "data bucket" ]
+license = "MIT"
+
+[dependencies]
+base = "0.9.8"
+sha2 = "0.0.4"
