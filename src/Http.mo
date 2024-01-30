@@ -2,7 +2,7 @@ import Blob "mo:base/Blob";
 import HashMap "mo:base/HashMap";
 import Option "mo:base/Option";
 
-module Http {
+module {
     public type Request = {
         body: Blob;
         headers : [(Text, Text)];
