@@ -7,5 +7,5 @@ keywords = [ "ics2", "storage", "data bucket" ]
 license = "MIT"
 
 [dependencies]
-base = "0.9.8"
+base = "0.11.0"
 sha2 = "0.0.4"

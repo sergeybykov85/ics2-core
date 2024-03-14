@@ -21,13 +21,11 @@ import Http "./Http";
 import Types "./Types";
 import Utils "./Utils";
 
-shared (installation) actor class DataBucket(initArgs : Types.BucketArgs) = this {
+shared (installation) actor class _DataBucket(initArgs : Types.BucketArgs) = this {
 
     let OWNER = installation.caller;
 	// expiration period for chunk = 10 mins (in nanosec)
 	let TTL_CHUNK =  10 * 60 * 1_000_000_000;
-	// def scan period is 60 min = 3600 sec
-	let CLEAN_UP_PERIOD_SEC = 3600;
 	let DEF_CSS =  "<style>" # Utils.DEF_BODY_STYLE # "</style>"; 
 
 	stable let ACCESS_TYPE = initArgs.access_type;
@@ -36,7 +34,7 @@ shared (installation) actor class DataBucket(initArgs : Types.BucketArgs) = this
 	stable var operators = initArgs.operators;
 	// applicable for http_request for html content only
 	stable var html_resource_template = Option.make(Utils.DEF_TEMPLATE);
-	stable var cleanup_period_sec = CLEAN_UP_PERIOD_SEC;
+	stable var cleanup_period_sec = 0;
 
 	private func init_access_tokens (access_token : ?[Types.AccessToken]) : Trie.Trie<Text, Types.AccessToken> {
 		var r:Trie.Trie<Text, Types.AccessToken> = Trie.empty();
@@ -50,7 +48,6 @@ shared (installation) actor class DataBucket(initArgs : Types.BucketArgs) = this
 	//  -------------- stable variables ----------------
 	stable var resource_state : [(Text, Types.Resource)] = [];
 	stable var chunk_state : [(Text, Types.ResourceChunk)] = [];
-	stable var chunk_binding_state : [(Text, Types.ChunkBinding)] = [];
 
 	stable var resource_data : Trie.Trie<Text, [Blob]> = Trie.empty();
 	stable var access_token : Trie.Trie<Text, Types.AccessToken> = init_access_tokens(initArgs.access_token);
@@ -246,7 +243,6 @@ shared (installation) actor class DataBucket(initArgs : Types.BucketArgs) = this
 
 	private func _clean_up_readonly() : () {
 		let now = Time.now();
-		var readonly = Buffer.Buffer<Types.Resource>(5);
 		for ((key, r) in resources.entries())	{
 			if (Option.isSome(r.readonly)) { 
 				if (now > Utils.unwrap(r.readonly))  {
@@ -274,8 +270,9 @@ shared (installation) actor class DataBucket(initArgs : Types.BucketArgs) = this
 		_clean_up_access();
 		_clean_up_readonly();
 	};
-	
-	stable var timer_cleanup = Timer.recurringTimer(#seconds(cleanup_period_sec), _clean_up_expired);	
+
+	//prior 0.18.0 = Timer.recurringTimer<system>(#seconds(cleanup_period_sec), _clean_up_expired);	
+	stable var timer_cleanup = 0;	
 
 	/**
 	* Applies list of operators for the storage service
@@ -406,7 +403,7 @@ shared (installation) actor class DataBucket(initArgs : Types.BucketArgs) = this
 		let cycles_to_leave = Option.get(args.remainder_cycles, 0);
 		if  (cycles > cycles_to_leave) {
 			let cycles_to_send:Nat = cycles - cycles_to_leave;
-			Cycles.add(cycles_to_send);
+			Cycles.add<system>(cycles_to_send);
             await wallet.wallet_receive();
 		}
 	};
@@ -526,7 +523,7 @@ shared (installation) actor class DataBucket(initArgs : Types.BucketArgs) = this
 		if (not (caller == OWNER or _is_operator(caller))) return #err(#AccessDenied);
 		cleanup_period_sec:=seconds;
 		Timer.cancelTimer (timer_cleanup);
-		timer_cleanup:= Timer.recurringTimer(#seconds(cleanup_period_sec), _clean_up_expired);
+		timer_cleanup:= Timer.recurringTimer<system>(#seconds(cleanup_period_sec), _clean_up_expired);
 		return #ok();
 	};		
 	/**
@@ -583,7 +580,7 @@ shared (installation) actor class DataBucket(initArgs : Types.BucketArgs) = this
 		return #ok();
 	};		
 
-	public shared query ({ caller }) func http_request(request : Http.Request) : async Http.Response {
+	public shared query func http_request(request : Http.Request) : async Http.Response {
 		// check download suffix
 		switch (Utils.get_resource_id(request.url)) {
 			case (?r) {
@@ -615,7 +612,7 @@ shared (installation) actor class DataBucket(initArgs : Types.BucketArgs) = this
 						} else {
 							let by_names = Utils.hash(canister_id, r.path);
         					switch (resources.get(by_names)) {
-								case (?d) {by_names;};
+								case (?_d) {by_names;};
 								// path till the last element, final id is a name
 								case (null) { 
 									let k1 = Utils.hash(canister_id, Array.subArray<Text>(r.path, 0, path_size - 1));
@@ -865,7 +862,7 @@ shared (installation) actor class DataBucket(initArgs : Types.BucketArgs) = this
 	*/
 	public shared ({ caller }) func commit_batch(chunk_ids : [Text], resource_args : Types.ResourceArgs) : async Result.Result<Types.IdUrl, Types.Errors> {
 		if (not (caller == OWNER or _is_operator(caller))) return #err(#AccessDenied);
-		_commit_batch(chunk_ids, resource_args, caller);
+		_commit_batch(chunk_ids, resource_args);
 	};
 
 	/**
@@ -883,7 +880,7 @@ shared (installation) actor class DataBucket(initArgs : Types.BucketArgs) = this
 				let ar = List.toArray(List.reverse(binding.chunks));
 
 				// commit batch based on the chunk ids matched to binding key
-				let r = _commit_batch(ar, resource_args, caller);
+				let r = _commit_batch(ar, resource_args);
 				// remove binding key
 				chunk_bindings.delete(binding_key);
 				r;
@@ -1209,11 +1206,10 @@ shared (installation) actor class DataBucket(initArgs : Types.BucketArgs) = this
 		};
 	};	
 
-	private func _commit_batch(chunk_ids : [Text], resource_args : Types.ResourceArgs, owner : Principal) : Result.Result<Types.IdUrl, Types.Errors> {
+	private func _commit_batch(chunk_ids : [Text], resource_args : Types.ResourceArgs) : Result.Result<Types.IdUrl, Types.Errors> {
 		if (Utils.invalid_name(resource_args.name)) return #err(#InvalidRequest);
 		// entire content of all chunks
 		var content = Buffer.Buffer<Blob>(0);
-		var content_size = 0;
 		
 		
 		// logic of validation could be extended
@@ -1240,9 +1236,9 @@ shared (installation) actor class DataBucket(initArgs : Types.BucketArgs) = this
 		return html_resource_template;
 	};
 
-	public query func get_cleanup_period_sec() : async Nat {
-		return cleanup_period_sec;
-	};	
+	public query func get_timer_and_cleanup_period_sec() : async (Timer.TimerId, Nat) {
+		return (timer_cleanup, cleanup_period_sec);
+	};			
 
 	public query func get_version() : async Text {
 		return Utils.VERSION;
@@ -1301,13 +1297,13 @@ shared (installation) actor class DataBucket(initArgs : Types.BucketArgs) = this
 		chunks := Map.fromIter<Text, Types.ResourceChunk>(chunk_state.vals(), chunk_state.size(), Text.equal, Text.hash);
 		resource_state:=[];
 		chunk_state:=[];
-		timer_cleanup:= Timer.recurringTimer(#seconds(cleanup_period_sec), _clean_up_expired);
+		timer_cleanup:= Timer.recurringTimer<system>(#seconds(cleanup_period_sec), _clean_up_expired);
 
 	};
 
   	public shared func wallet_receive() {
     	let amount = Cycles.available();
-    	ignore Cycles.accept(amount);
+    	ignore Cycles.accept<system>(amount);
   	};
 	
   	public query func available_cycles() : async Nat {

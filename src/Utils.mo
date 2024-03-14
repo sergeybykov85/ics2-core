@@ -123,10 +123,6 @@ module {
         } else return null;
     };    
 
-    private func contains_invalid_symbol (id:Char) : Bool  {
-        Option.isSome(Array.find(NOT_ALLOWED_FOR_NAME, func (x: Char) : Bool { x == id } ));
-    };
-
     public func invalid_name (name : Text) : Bool {
         Text.contains(name, #predicate (func(c) { Option.isSome(Array.find(NOT_ALLOWED_FOR_NAME, func (x: Char) : Bool { x == c } ))  })  );
     };
